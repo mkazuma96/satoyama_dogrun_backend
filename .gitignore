@@ -14,3 +14,15 @@ __pycache__/
 
 # Environment variables
 .env
+
+# macOS artifacts
+.DS_Store
+__MACOSX/
+
+# db_control local assets and generated files
+/db_control/.DS_Store
+/db_control/__pycache__/
+/db_control/satoyama_dogrun.db
+/db_control/**/*.sql
+/db_control/dumps/
+/db_control/certs/
