@@ -28,9 +28,13 @@ backend/
 
 ## セットアップ
 
-### 1. 仮想環境の作成
+### 1. 仮想環境の作成と有効化
 
 ```bash
+# macOS用の仮想環境が既に存在する場合
+source venv_mac/bin/activate
+
+# 新しく作成する場合
 python -m venv venv
 source venv/bin/activate  # macOS/Linux
 # venv\Scripts\activate  # Windows
@@ -61,10 +65,33 @@ ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ### 4. サーバーの起動
 
 ```bash
-python main.py
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 バックエンドは `http://localhost:8000` で起動します。
+
+## 起動コマンド
+
+### 開発サーバー起動
+```bash
+cd satoyama_dogrun_backend
+source venv_mac/bin/activate  # macOS用仮想環境を有効化
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+### 依存関係のインストール（初回のみ）
+```bash
+pip install -r requirements.txt
+```
+
+### 仮想環境の有効化
+```bash
+# macOS用
+source venv_mac/bin/activate
+
+# 新規作成した場合
+source venv/bin/activate
+```
 
 ## API ドキュメント
 
