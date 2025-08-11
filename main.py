@@ -392,7 +392,7 @@ async def mark_notice_as_read(
     notice = db.query(Notice).filter(Notice.id == notice_id).first()
     if not notice:
         raise HTTPException(status_code=404, detail="お知らせが見つかりません")
-    
+
     notice.read = True
     db.commit()
     return {"message": "既読にしました"}
@@ -428,4 +428,4 @@ async def get_tags(db=Depends(get_db)):
     return [TagResponse.from_orm(tag) for tag in tags]
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
