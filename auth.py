@@ -9,7 +9,7 @@ import os
 from dotenv import load_dotenv
 
 from database import get_db
-from models import User
+from db_control.models import User
 
 load_dotenv()
 
