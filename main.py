@@ -73,6 +73,11 @@ app = FastAPI(
 
 # CORS設定
 allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+# Azure環境のURLも追加
+azure_frontend_url = "https://app-002-gen10-step3-2-node-oshima14.azurewebsites.net"
+if azure_frontend_url not in allowed_origins:
+    allowed_origins.append(azure_frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
