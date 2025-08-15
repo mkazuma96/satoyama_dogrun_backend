@@ -1,11 +1,14 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from typing import List, Optional
 import uvicorn
 from datetime import datetime, date
 import os
+import shutil
+from pathlib import Path
 from dotenv import load_dotenv
 
 from models import (
@@ -17,11 +20,18 @@ from models import (
 from db_control.models import User as DbUser
 from db_control.models import Dog as DbDog
 from db_control.models import Post as DbPost
+from db_control.models import PostImage as DbPostImage
 from db_control.models import Comment as DbComment
 from db_control.models import Like as DbLike
 from db_control.models import Hashtag as DbHashtag
 from db_control.models import PostHashtag as DbPostHashtag
-from db_control.models import AdminUser, AdminLog, Application, BusinessHour, SpecialHoliday, SystemSetting
+from db_control.models import VaccinationRecord as DbVaccinationRecord
+from db_control.models import Event as DbEvent
+from db_control.models import EventRegistration as DbEventRegistration
+from db_control.models import EntryLog as DbEntryLog
+from db_control.models import EntryAction
+from db_control.models import EventStatus
+from db_control.models import AdminUser, AdminLog, Application, ApplicationStatus, BusinessHour, SpecialHoliday, SystemSetting
 from database import engine, get_db
 from auth import (
     get_current_user, create_access_token, verify_password, get_password_hash,
@@ -31,12 +41,15 @@ from schemas import (
     LoginRequest, RegisterRequest, CreatePostRequest, AddCommentRequest,
     AddDogRequest, UpdateUserProfileRequest, CalendarRequest,
     UserRegisterResponse,
-    RegisterDbRequest, UpdateUserDbRequest, UserDbResponse,
+    RegisterDbRequest, UpdateUserDbRequest, UserDbResponse, UserProfileDetailResponse,
     CreateDogDbRequest, UpdateDogDbRequest, DogDbResponse,
-    CreatePostDbRequest, PostDbResponse, CreateCommentDbRequest, CommentDbResponse,
+    VaccinationRecordRequest, VaccinationRecordResponse,
+    CreatePostDbRequest, PostDbResponse, PostDetailResponse, CreateCommentDbRequest, CommentDbResponse,
+    EventResponse as EventDbResponse, EventDetailResponse, EventRegistrationRequest, EventParticipantResponse,
+    QRCodeResponse, EntryRequest, EntryResponse, CurrentVisitorsResponse, EntryHistoryResponse,
     # 管理者用スキーマ
     AdminLoginRequest, AdminLoginResponse, AdminUserResponse,
-    ApplicationResponse, ApplicationUpdateRequest,
+    ApplicationResponse, ApplicationUpdateRequest, ApplicationCreateRequest, ApplicationStatusResponse,
     PostManagementResponse, PostStatusUpdateRequest,
     DashboardStatsResponse,
     # 営業時間・設定管理用スキーマ
@@ -59,15 +72,24 @@ app = FastAPI(
 )
 
 # CORS設定
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 security = HTTPBearer()
+
+# アップロード用ディレクトリの作成
+UPLOAD_DIR = Path("uploads")
+POST_UPLOAD_DIR = UPLOAD_DIR / "posts"
+POST_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# Static filesのマウント
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # データベース初期化（環境変数で制御）
 from database import Base
@@ -186,16 +208,15 @@ async def get_applications(
     
     responses = []
     for app in applications:
-        # ユーザー情報を取得
-        user = db.query(DbUser).filter(DbUser.id == app.user_id).first()
-        user_name = f"{user.last_name} {user.first_name}" if user else "不明"
+        # 申請データから直接情報を取得（user_idはNullの可能性がある）
+        user_name = f"{app.user_last_name} {app.user_first_name}"
         
         responses.append(ApplicationResponse(
             id=app.id,
-            user_id=app.user_id,
+            user_id=app.user_id,  # Noneの場合もある
             user_name=user_name,
-            user_email=user.email if user else "",
-            user_phone=user.phone_number if user else "",
+            user_email=app.user_email,
+            user_phone=app.user_phone,
             dog_name=app.dog_name,
             dog_breed=app.dog_breed,
             dog_weight=app.dog_weight,
@@ -283,11 +304,57 @@ async def approve_application(
     db=Depends(get_db)
 ):
     """申請承認"""
+    from uuid import uuid4
+    
     application = db.query(Application).filter(Application.id == application_id).first()
     if not application:
         raise HTTPException(status_code=404, detail="申請が見つかりません")
     
-    application.status = "approved"
+    # 既に承認済みの場合はエラー
+    if application.status == ApplicationStatus.approved:
+        raise HTTPException(status_code=400, detail="この申請は既に承認されています")
+    
+    # 新規申請の場合（user_idがNULL）、ユーザーを作成
+    if application.user_id is None and application.user_email:
+        # メールアドレスの重複チェック
+        existing_user = db.query(DbUser).filter(DbUser.email == application.user_email).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
+        
+        # ユーザー作成
+        new_user = DbUser(
+            id=str(uuid4()),
+            email=application.user_email,
+            password_hash=application.user_password_hash,  # 申請時に保存したハッシュ値を使用
+            last_name=application.user_last_name,
+            first_name=application.user_first_name,
+            phone_number=application.user_phone,
+            address=application.user_address,
+            prefecture=application.user_prefecture,
+            city=application.user_city,
+            created_at=datetime.utcnow()
+        )
+        db.add(new_user)
+        db.flush()  # ユーザーをデータベースに反映（コミット前）
+        
+        # 犬情報も同時に登録
+        if application.dog_name:
+            new_dog = DbDog(
+                id=str(uuid4()),
+                owner_id=new_user.id,  # owner_idが正しいカラム名
+                name=application.dog_name,
+                breed=application.dog_breed,
+                birthday_at=date.today(),  # 仮の誕生日を設定（必須フィールドのため）
+                gender=application.dog_gender,
+                created_at=datetime.utcnow()
+            )
+            db.add(new_dog)
+        
+        # applicationのuser_idを更新
+        application.user_id = new_user.id
+    
+    # 申請ステータスを承認に更新
+    application.status = ApplicationStatus.approved
     application.admin_notes = request.admin_notes
     application.approved_by = current_admin.id
     application.approved_at = datetime.utcnow()
@@ -305,7 +372,7 @@ async def approve_application(
         db=db
     )
     
-    return {"message": "申請を承認しました"}
+    return {"message": "申請を承認し、ユーザーを作成しました"}
 
 @app.put("/admin/applications/{application_id}/reject")
 async def reject_application(
@@ -319,7 +386,11 @@ async def reject_application(
     if not application:
         raise HTTPException(status_code=404, detail="申請が見つかりません")
     
-    application.status = "rejected"
+    # 既に処理済みの場合はエラー
+    if application.status != ApplicationStatus.pending:
+        raise HTTPException(status_code=400, detail="この申請は既に処理されています")
+    
+    application.status = ApplicationStatus.rejected
     application.admin_notes = request.admin_notes
     application.rejection_reason = request.rejection_reason
     application.approved_by = current_admin.id
@@ -1259,43 +1330,78 @@ async def add_admin_comment(
 # ===== 既存のAPIエンドポイント =====
 
 # 認証関連
-@app.post("/auth/register", response_model=UserDbResponse)
-async def register(request: RegisterDbRequest, db=Depends(get_db)):
-    """ユーザー登録"""
-    # メールアドレスの重複チェック（db_control.models.User）
+@app.post("/auth/apply", response_model=ApplicationStatusResponse)
+async def apply_registration(request: ApplicationCreateRequest, db=Depends(get_db)):
+    """新規利用申請（ユーザー登録申請）"""
+    from uuid import uuid4
+    
+    # メールアドレスの重複チェック
     existing_user = db.query(DbUser).filter(DbUser.email == request.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
     
-    # ユーザー作成（db_control.models.User）
-    from uuid import uuid4
-    user = DbUser(
-        id=str(uuid4()),
-        email=request.email,
-        password_hash=get_password_hash(request.password),
-        last_name=request.last_name,
-        first_name=request.first_name,
-        address=request.address,
-        phone_number=request.phone_number,
-        prefecture=request.prefecture,
-        city=request.city,
-        created_at=datetime.utcnow(),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
+    # 既存申請の確認（同じメールアドレスでpending状態の申請がないか）
+    existing_application = db.query(Application).filter(
+        Application.user_email == request.email,
+        Application.status == ApplicationStatus.pending
+    ).first()
+    if existing_application:
+        raise HTTPException(status_code=400, detail="このメールアドレスで申請処理中です")
     
-    # 新レスポンスで返却（idはUUID文字列）
-    return UserDbResponse(
-        id=user.id,
-        email=user.email,
-        last_name=user.last_name,
-        first_name=user.first_name,
-        address=user.address,
-        phone_number=user.phone_number,
-        prefecture=user.prefecture,
-        city=user.city,
-        created_at=user.created_at,
+    # 申請データを作成
+    application = Application(
+        id=str(uuid4()),
+        # ユーザー情報（まだユーザーは作成しない）
+        user_id=None,  # 新規申請時はNULL
+        user_email=request.email,
+        user_password_hash=get_password_hash(request.password),
+        user_last_name=request.last_name,
+        user_first_name=request.first_name,
+        user_phone=request.phone_number,
+        user_address=request.address,
+        user_prefecture=request.prefecture,
+        user_city=request.city,
+        user_postal_code=request.postal_code,
+        # 犬情報
+        dog_name=request.dog_name,
+        dog_breed=request.dog_breed,
+        dog_weight=request.dog_weight,
+        dog_age=request.dog_age,
+        dog_gender=request.dog_gender,
+        vaccine_certificate=request.vaccine_certificate,
+        # 申請情報
+        request_date=request.request_date or date.today(),
+        request_time=request.request_time,
+        status=ApplicationStatus.pending,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    
+    db.add(application)
+    db.commit()
+    db.refresh(application)
+    
+    return ApplicationStatusResponse(
+        application_id=application.id,
+        status=application.status,
+        rejection_reason=None,
+        approved_at=None,
+        created_at=application.created_at
+    )
+
+@app.get("/auth/application-status/{application_id}", response_model=ApplicationStatusResponse)
+async def get_application_status(application_id: str, db=Depends(get_db)):
+    """申請状況の確認"""
+    application = db.query(Application).filter(Application.id == application_id).first()
+    if not application:
+        raise HTTPException(status_code=404, detail="申請が見つかりません")
+    
+    return ApplicationStatusResponse(
+        application_id=application.id,
+        status=application.status,
+        rejection_reason=application.rejection_reason,
+        approved_at=application.approved_at,
+        created_at=application.created_at
     )
 
 @app.post("/auth/login")
@@ -1332,6 +1438,42 @@ async def get_current_user_info(current_user = Depends(get_current_user)):
         prefecture=current_user.prefecture,
         city=current_user.city,
         created_at=current_user.created_at or datetime.utcnow(),
+    )
+
+@app.get("/users/profile", response_model=UserProfileDetailResponse)
+async def get_user_profile_detail(
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """ユーザープロフィール詳細取得（犬情報を含む）"""
+    # ユーザーの犬情報を取得
+    dogs = db.query(DbDog).filter(DbDog.owner_id == current_user.id).all()
+    
+    return UserProfileDetailResponse(
+        id=current_user.id,
+        email=current_user.email,
+        last_name=current_user.last_name,
+        first_name=current_user.first_name,
+        address=current_user.address,
+        phone_number=current_user.phone_number,
+        prefecture=current_user.prefecture,
+        city=current_user.city,
+        created_at=current_user.created_at or datetime.utcnow(),
+        dogs=[
+            DogDbResponse(
+                id=dog.id,
+                owner_id=dog.owner_id,
+                name=dog.name,
+                breed=dog.breed,
+                birthday_at=dog.birthday_at or date.today(),
+                gender=dog.gender,
+                personality=dog.personality,
+                likes=dog.likes,
+                avatar_url=dog.avatar_url,
+                created_at=dog.created_at,
+                updated_at=dog.updated_at
+            ) for dog in dogs
+        ]
     )
 
 @app.put("/users/profile", response_model=UserDbResponse)
@@ -1462,6 +1604,99 @@ async def delete_dog(
     db.commit()
     return {"message": "削除しました"}
 
+# ワクチン接種記録関連
+@app.get("/dogs/{dog_id}/vaccinations", response_model=List[VaccinationRecordResponse])
+async def get_vaccination_records(
+    dog_id: str,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """犬のワクチン接種記録取得"""
+    # 犬の所有者確認
+    dog = db.query(DbDog).filter(DbDog.id == dog_id, DbDog.owner_id == current_user.id).first()
+    if not dog:
+        raise HTTPException(status_code=404, detail="犬が見つかりません")
+    
+    records = db.query(DbVaccinationRecord).filter(DbVaccinationRecord.dog_id == dog_id).all()
+    return [
+        VaccinationRecordResponse(
+            id=r.id,
+            dog_id=r.dog_id,
+            vaccine_type=r.vaccine_type,
+            administered_at=r.administered_at,
+            next_due_at=r.next_due_at,
+            image_url=r.image_url,
+            created_at=r.created_at,
+            updated_at=r.updated_at
+        ) for r in records
+    ]
+
+@app.post("/dogs/{dog_id}/vaccinations", response_model=VaccinationRecordResponse)
+async def add_vaccination_record(
+    dog_id: str,
+    request: VaccinationRecordRequest,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """ワクチン接種記録の追加"""
+    from uuid import uuid4
+    
+    # 犬の所有者確認
+    dog = db.query(DbDog).filter(DbDog.id == dog_id, DbDog.owner_id == current_user.id).first()
+    if not dog:
+        raise HTTPException(status_code=404, detail="犬が見つかりません")
+    
+    record = DbVaccinationRecord(
+        id=str(uuid4()),
+        dog_id=dog_id,
+        vaccine_type=request.vaccine_type,
+        administered_at=request.administered_at,
+        next_due_at=request.next_due_at,
+        image_url=request.image_url,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+    
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    
+    return VaccinationRecordResponse(
+        id=record.id,
+        dog_id=record.dog_id,
+        vaccine_type=record.vaccine_type,
+        administered_at=record.administered_at,
+        next_due_at=record.next_due_at,
+        image_url=record.image_url,
+        created_at=record.created_at,
+        updated_at=record.updated_at
+    )
+
+@app.delete("/dogs/{dog_id}/vaccinations/{record_id}")
+async def delete_vaccination_record(
+    dog_id: str,
+    record_id: str,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """ワクチン接種記録の削除"""
+    # 犬の所有者確認
+    dog = db.query(DbDog).filter(DbDog.id == dog_id, DbDog.owner_id == current_user.id).first()
+    if not dog:
+        raise HTTPException(status_code=404, detail="犬が見つかりません")
+    
+    record = db.query(DbVaccinationRecord).filter(
+        DbVaccinationRecord.id == record_id,
+        DbVaccinationRecord.dog_id == dog_id
+    ).first()
+    
+    if not record:
+        raise HTTPException(status_code=404, detail="接種記録が見つかりません")
+    
+    db.delete(record)
+    db.commit()
+    return {"message": "削除しました"}
+
 # 投稿関連 (db_control)
 @app.get("/posts", response_model=List[PostDbResponse])
 async def get_posts(
@@ -1484,25 +1719,151 @@ async def get_posts(
         ))
     return responses
 
-@app.post("/posts", response_model=PostDbResponse)
-async def create_post(
-    request: CreatePostDbRequest,
+@app.get("/posts/feed", response_model=List[PostDetailResponse])
+async def get_posts_feed(
+    search: Optional[str] = None,
+    hashtag: Optional[str] = None,
+    limit: int = 20,
+    offset: int = 0,
     current_user = Depends(get_current_user),
     db=Depends(get_db)
 ):
-    """投稿作成 (db_control)"""
+    """詳細な投稿フィード取得（画像、ハッシュタグ、ユーザー情報付き）"""
+    query = db.query(DbPost)
+    
+    # ハッシュタグ検索
+    if hashtag:
+        hashtag_obj = db.query(DbHashtag).filter(DbHashtag.tag == hashtag).first()
+        if hashtag_obj:
+            post_ids = db.query(DbPostHashtag.post_id).filter(
+                DbPostHashtag.hashtag_id == hashtag_obj.id
+            ).subquery()
+            query = query.filter(DbPost.id.in_(post_ids))
+    
+    # テキスト検索
+    if search:
+        query = query.filter(DbPost.content.contains(search))
+    
+    # ページネーション
+    posts = query.order_by(DbPost.created_at.desc()).offset(offset).limit(limit).all()
+    
+    responses: List[PostDetailResponse] = []
+    for post in posts:
+        # ユーザー情報取得
+        user = db.query(DbUser).filter(DbUser.id == post.user_id).first()
+        user_name = f"{user.last_name or ''} {user.first_name or ''}".strip() if user else "不明なユーザー"
+        
+        # 画像URL取得
+        images = db.query(DbPostImage.image_url).filter(DbPostImage.post_id == post.id).all()
+        image_urls = [img[0] for img in images]
+        
+        # ハッシュタグ取得
+        hashtags_query = db.query(DbHashtag.tag).join(
+            DbPostHashtag, DbHashtag.id == DbPostHashtag.hashtag_id
+        ).filter(DbPostHashtag.post_id == post.id)
+        hashtags = [tag[0] for tag in hashtags_query.all()]
+        
+        # カウント取得
+        comments_count = db.query(DbComment).filter(DbComment.post_id == post.id).count()
+        likes_count = db.query(DbLike).filter(DbLike.post_id == post.id).count()
+        
+        # 現在のユーザーがいいねしているか
+        is_liked = db.query(DbLike).filter(
+            DbLike.post_id == post.id,
+            DbLike.user_id == current_user.id
+        ).first() is not None
+        
+        responses.append(PostDetailResponse(
+            id=post.id,
+            user_id=post.user_id,
+            user_name=user_name,
+            user_avatar=user.avatar_url if user else None,
+            content=post.content,
+            images=image_urls,
+            hashtags=hashtags,
+            created_at=post.created_at,
+            updated_at=post.updated_at,
+            comments_count=comments_count,
+            likes_count=likes_count,
+            is_liked=is_liked
+        ))
+    
+    return responses
+
+@app.post("/posts", response_model=PostDbResponse)
+async def create_post(
+    content: str = Form(...),
+    hashtags: Optional[str] = Form(None),
+    images: Optional[List[UploadFile]] = File(None),
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """投稿作成 (画像アップロード・ハッシュタグ対応)"""
     from uuid import uuid4
+    import re
+    
+    # 投稿を作成
     post = DbPost(
         id=str(uuid4()),
         user_id=current_user.id,
-        content=request.content,
+        content=content,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
     )
     db.add(post)
+    db.flush()  # IDを取得するためにflush
+    
+    # 画像アップロード処理
+    if images:
+        for image in images:
+            if image.filename:
+                # ファイル名を生成
+                file_extension = Path(image.filename).suffix
+                file_name = f"{uuid4()}{file_extension}"
+                file_path = POST_UPLOAD_DIR / file_name
+                
+                # ファイルを保存
+                with file_path.open("wb") as buffer:
+                    shutil.copyfileobj(image.file, buffer)
+                
+                # PostImageレコードを作成
+                post_image = DbPostImage(
+                    id=str(uuid4()),
+                    post_id=post.id,
+                    image_url=f"/uploads/posts/{file_name}"
+                )
+                db.add(post_image)
+    
+    # ハッシュタグ処理
+    if hashtags:
+        # カンマ区切りまたはスペース区切りのハッシュタグを処理
+        tag_list = re.split(r'[,\s]+', hashtags)
+        for tag_str in tag_list:
+            if tag_str:
+                # #を除去
+                tag_name = tag_str.lstrip('#').strip()
+                if tag_name:
+                    # 既存のハッシュタグを検索または作成
+                    hashtag = db.query(DbHashtag).filter(DbHashtag.tag == tag_name).first()
+                    if not hashtag:
+                        hashtag = DbHashtag(
+                            id=str(uuid4()),
+                            tag=tag_name
+                        )
+                        db.add(hashtag)
+                        db.flush()
+                    
+                    # PostHashtagリレーションを作成
+                    post_hashtag = DbPostHashtag(
+                        id=str(uuid4()),
+                        post_id=post.id,
+                        hashtag_id=hashtag.id
+                    )
+                    db.add(post_hashtag)
+    
     db.commit()
     db.refresh(post)
-    # 画像/ハッシュタグは後続で対応
+    
     return PostDbResponse(
         id=post.id, user_id=post.user_id, content=post.content,
         created_at=post.created_at, updated_at=post.updated_at,
@@ -1519,13 +1880,91 @@ async def like_post(
     post = db.query(DbPost).filter(DbPost.id == post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="投稿が見つかりません")
-    exists = db.query(DbLike).filter(DbLike.post_id == post_id, DbLike.user_id == current_user.id).first()
-    if not exists:
-        from uuid import uuid4
-        like = DbLike(id=str(uuid4()), post_id=post_id, user_id=current_user.id, created_at=datetime.utcnow())
-        db.add(like)
-        db.commit()
-    return {"message": "いいねしました"}
+    
+    # 既存のいいねを確認
+    exists = db.query(DbLike).filter(
+        DbLike.post_id == post_id, 
+        DbLike.user_id == current_user.id
+    ).first()
+    
+    if exists:
+        return {"message": "すでにいいねしています", "liked": True}
+    
+    # 新しいいいねを追加
+    from uuid import uuid4
+    like = DbLike(
+        id=str(uuid4()), 
+        post_id=post_id, 
+        user_id=current_user.id, 
+        created_at=datetime.utcnow()
+    )
+    db.add(like)
+    db.commit()
+    
+    # いいね数を取得
+    likes_count = db.query(DbLike).filter(DbLike.post_id == post_id).count()
+    
+    return {
+        "message": "いいねしました", 
+        "liked": True,
+        "likes_count": likes_count
+    }
+
+@app.delete("/posts/{post_id}/like")
+async def unlike_post(
+    post_id: str,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """いいねを解除 (db_control)"""
+    post = db.query(DbPost).filter(DbPost.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="投稿が見つかりません")
+    
+    like = db.query(DbLike).filter(
+        DbLike.post_id == post_id, 
+        DbLike.user_id == current_user.id
+    ).first()
+    
+    if not like:
+        return {"message": "いいねしていません", "liked": False}
+    
+    db.delete(like)
+    db.commit()
+    
+    # いいね数を取得
+    likes_count = db.query(DbLike).filter(DbLike.post_id == post_id).count()
+    
+    return {
+        "message": "いいねを解除しました", 
+        "liked": False,
+        "likes_count": likes_count
+    }
+
+@app.get("/posts/{post_id}/comments", response_model=List[CommentDbResponse])
+async def get_comments(
+    post_id: str,
+    db=Depends(get_db)
+):
+    """投稿のコメント一覧取得"""
+    post = db.query(DbPost).filter(DbPost.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="投稿が見つかりません")
+    
+    comments = db.query(DbComment).filter(
+        DbComment.post_id == post_id
+    ).order_by(DbComment.created_at.desc()).all()
+    
+    return [
+        CommentDbResponse(
+            id=comment.id,
+            post_id=comment.post_id,
+            user_id=comment.user_id,
+            content=comment.content,
+            created_at=comment.created_at
+        )
+        for comment in comments
+    ]
 
 @app.post("/posts/{post_id}/comments", response_model=CommentDbResponse)
 async def add_comment(
@@ -1557,12 +1996,220 @@ async def add_comment(
         created_at=comment.created_at,
     )
 
-# イベント関連
-@app.get("/events", response_model=List[EventResponse])
-async def get_events(db=Depends(get_db)):
-    """イベント一覧取得"""
-    events = db.query(Event).all()
-    return [EventResponse.from_orm(event) for event in events]
+# イベント関連 (db_control)
+@app.get("/events", response_model=List[EventDbResponse])
+async def get_events(
+    upcoming_only: bool = True,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """イベント一覧取得（参加状況付き）"""
+    query = db.query(DbEvent)
+    
+    if upcoming_only:
+        # 今日以降のイベントのみ
+        query = query.filter(DbEvent.event_date >= date.today())
+    
+    events = query.order_by(DbEvent.event_date, DbEvent.start_time).all()
+    
+    responses = []
+    for event in events:
+        # 参加者数を取得
+        participants_count = db.query(DbEventRegistration).filter(
+            DbEventRegistration.event_id == event.id
+        ).count()
+        
+        # 現在のユーザーが登録しているか確認
+        is_registered = db.query(DbEventRegistration).filter(
+            DbEventRegistration.event_id == event.id,
+            DbEventRegistration.user_id == current_user.id
+        ).first() is not None
+        
+        responses.append(EventDbResponse(
+            id=event.id,
+            title=event.title,
+            description=event.description,
+            event_date=event.event_date,
+            start_time=event.start_time.strftime("%H:%M") if event.start_time else "",
+            end_time=event.end_time.strftime("%H:%M") if event.end_time else "",
+            location=event.location,
+            capacity=event.capacity or 0,
+            fee=event.fee or 0,
+            status=event.status.value if event.status else "reception",
+            current_participants=participants_count,
+            is_registered=is_registered,
+            created_at=event.created_at,
+            updated_at=event.updated_at
+        ))
+    
+    return responses
+
+@app.get("/events/{event_id}", response_model=EventDetailResponse)
+async def get_event_detail(
+    event_id: str,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """イベント詳細取得"""
+    event = db.query(DbEvent).filter(DbEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="イベントが見つかりません")
+    
+    # 参加者数を取得
+    participants_count = db.query(DbEventRegistration).filter(
+        DbEventRegistration.event_id == event.id
+    ).count()
+    
+    # 現在のユーザーの登録状況を確認
+    user_registrations = db.query(DbEventRegistration).filter(
+        DbEventRegistration.event_id == event.id,
+        DbEventRegistration.user_id == current_user.id
+    ).all()
+    
+    is_registered = len(user_registrations) > 0
+    my_dogs_registered = [reg.dog_id for reg in user_registrations if reg.dog_id]
+    
+    return EventDetailResponse(
+        id=event.id,
+        title=event.title,
+        description=event.description,
+        event_date=event.event_date,
+        start_time=event.start_time.strftime("%H:%M") if event.start_time else "",
+        end_time=event.end_time.strftime("%H:%M") if event.end_time else "",
+        location=event.location,
+        capacity=event.capacity or 0,
+        fee=event.fee or 0,
+        status=event.status.value if event.status else "reception",
+        current_participants=participants_count,
+        is_registered=is_registered,
+        my_dogs_registered=my_dogs_registered,
+        created_at=event.created_at,
+        updated_at=event.updated_at
+    )
+
+@app.post("/events/{event_id}/register")
+async def register_for_event(
+    event_id: str,
+    request: EventRegistrationRequest,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """イベント参加登録"""
+    # イベントの存在確認
+    event = db.query(DbEvent).filter(DbEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="イベントが見つかりません")
+    
+    # 定員確認
+    current_participants = db.query(DbEventRegistration).filter(
+        DbEventRegistration.event_id == event_id
+    ).count()
+    
+    if event.capacity and current_participants >= event.capacity:
+        raise HTTPException(status_code=400, detail="イベントは満員です")
+    
+    # 既存の登録を削除（再登録の場合）
+    db.query(DbEventRegistration).filter(
+        DbEventRegistration.event_id == event_id,
+        DbEventRegistration.user_id == current_user.id
+    ).delete()
+    
+    # 新規登録
+    from uuid import uuid4
+    for dog_id in request.dog_ids:
+        # 犬の所有権確認
+        dog = db.query(DbDog).filter(
+            DbDog.id == dog_id,
+            DbDog.owner_id == current_user.id
+        ).first()
+        
+        if not dog:
+            continue  # 所有していない犬はスキップ
+        
+        registration = DbEventRegistration(
+            id=str(uuid4()),
+            user_id=current_user.id,
+            event_id=event_id,
+            dog_id=dog_id
+        )
+        db.add(registration)
+    
+    # ユーザーのみの登録（犬なし）
+    if not request.dog_ids:
+        registration = DbEventRegistration(
+            id=str(uuid4()),
+            user_id=current_user.id,
+            event_id=event_id,
+            dog_id=None
+        )
+        db.add(registration)
+    
+    db.commit()
+    
+    return {"message": "イベントに参加登録しました", "event_id": event_id}
+
+@app.delete("/events/{event_id}/register")
+async def cancel_event_registration(
+    event_id: str,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """イベント参加キャンセル"""
+    # 登録の存在確認
+    registrations = db.query(DbEventRegistration).filter(
+        DbEventRegistration.event_id == event_id,
+        DbEventRegistration.user_id == current_user.id
+    ).all()
+    
+    if not registrations:
+        raise HTTPException(status_code=404, detail="参加登録が見つかりません")
+    
+    # 登録を削除
+    for reg in registrations:
+        db.delete(reg)
+    
+    db.commit()
+    
+    return {"message": "参加をキャンセルしました", "event_id": event_id}
+
+@app.get("/events/{event_id}/participants", response_model=List[EventParticipantResponse])
+async def get_event_participants(
+    event_id: str,
+    db=Depends(get_db)
+):
+    """イベント参加者一覧取得"""
+    # イベントの存在確認
+    event = db.query(DbEvent).filter(DbEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="イベントが見つかりません")
+    
+    # 参加登録を取得
+    registrations = db.query(DbEventRegistration).filter(
+        DbEventRegistration.event_id == event_id
+    ).all()
+    
+    responses = []
+    for reg in registrations:
+        # ユーザー情報取得
+        user = db.query(DbUser).filter(DbUser.id == reg.user_id).first()
+        user_name = f"{user.last_name or ''} {user.first_name or ''}".strip() if user else "不明"
+        
+        # 犬情報取得（該当する場合）
+        dog_name = None
+        if reg.dog_id:
+            dog = db.query(DbDog).filter(DbDog.id == reg.dog_id).first()
+            dog_name = dog.name if dog else None
+        
+        responses.append(EventParticipantResponse(
+            id=reg.id,
+            user_id=reg.user_id,
+            user_name=user_name,
+            dog_id=reg.dog_id,
+            dog_name=dog_name,
+            registered_at=datetime.utcnow()  # EventRegistrationにregistered_atがない場合の仮値
+        ))
+    
+    return responses
 
 @app.get("/calendar/{year}/{month}")
 async def get_calendar(year: int, month: int):
@@ -1573,6 +2220,241 @@ async def get_calendar(year: int, month: int):
         "month": month,
         "days": []  # カレンダーの日付情報
     }
+
+# 入場管理関連 (db_control)
+@app.get("/entry/qrcode", response_model=QRCodeResponse)
+async def generate_qr_code(
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """ユーザー専用のQRコード生成"""
+    import qrcode
+    import io
+    import base64
+    from datetime import timedelta
+    
+    # QRコードに含めるデータ（ユーザーIDと有効期限）
+    expires_at = datetime.utcnow() + timedelta(minutes=5)
+    qr_data = {
+        "user_id": current_user.id,
+        "expires_at": expires_at.isoformat()
+    }
+    
+    # QRコード生成
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(str(qr_data))
+    qr.make(fit=True)
+    
+    # 画像を生成してBase64エンコード
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    img_str = base64.b64encode(buffer.getvalue()).decode()
+    
+    return QRCodeResponse(
+        qr_code=f"data:image/png;base64,{img_str}",
+        user_id=current_user.id,
+        expires_at=expires_at
+    )
+
+@app.post("/entry/scan")
+async def scan_qr_code(
+    qr_data: dict,
+    admin_user = Depends(get_current_admin_user),
+    db=Depends(get_db)
+):
+    """QRコードスキャン（管理者のみ）"""
+    # QRコードのデータを検証
+    user_id = qr_data.get("user_id")
+    expires_at_str = qr_data.get("expires_at")
+    
+    if not user_id or not expires_at_str:
+        raise HTTPException(status_code=400, detail="無効なQRコードです")
+    
+    # 有効期限チェック
+    expires_at = datetime.fromisoformat(expires_at_str)
+    if datetime.utcnow() > expires_at:
+        raise HTTPException(status_code=400, detail="QRコードの有効期限が切れています")
+    
+    # ユーザー確認
+    user = db.query(DbUser).filter(DbUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
+    
+    return {
+        "user_id": user_id,
+        "user_name": f"{user.last_name or ''} {user.first_name or ''}".strip(),
+        "message": "QRコードを確認しました"
+    }
+
+@app.post("/entry/enter", response_model=EntryResponse)
+async def enter_dogrun(
+    request: EntryRequest,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """ドッグラン入場記録"""
+    from uuid import uuid4
+    
+    # 既に入場中かチェック
+    last_entry = db.query(DbEntryLog).filter(
+        DbEntryLog.user_id == current_user.id
+    ).order_by(DbEntryLog.occurred_at.desc()).first()
+    
+    if last_entry and last_entry.action == EntryAction.entry:
+        raise HTTPException(status_code=400, detail="既に入場中です")
+    
+    # 入場記録を作成
+    entry_log = DbEntryLog(
+        id=str(uuid4()),
+        user_id=current_user.id,
+        action=EntryAction.entry,
+        occurred_at=datetime.utcnow()
+    )
+    db.add(entry_log)
+    
+    # 犬の情報を取得
+    dogs_info = []
+    for dog_id in request.dog_ids:
+        dog = db.query(DbDog).filter(
+            DbDog.id == dog_id,
+            DbDog.owner_id == current_user.id
+        ).first()
+        if dog:
+            dogs_info.append({
+                "id": dog.id,
+                "name": dog.name
+            })
+    
+    db.commit()
+    
+    return EntryResponse(
+        entry_id=entry_log.id,
+        user_id=current_user.id,
+        user_name=f"{current_user.last_name or ''} {current_user.first_name or ''}".strip(),
+        dogs=dogs_info,
+        entry_time=entry_log.occurred_at,
+        status="in_park"
+    )
+
+@app.post("/entry/exit")
+async def exit_dogrun(
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """ドッグラン退場記録"""
+    from uuid import uuid4
+    
+    # 最後の入場記録を確認
+    last_entry = db.query(DbEntryLog).filter(
+        DbEntryLog.user_id == current_user.id
+    ).order_by(DbEntryLog.occurred_at.desc()).first()
+    
+    if not last_entry or last_entry.action != EntryAction.entry:
+        raise HTTPException(status_code=400, detail="入場記録がありません")
+    
+    # 退場記録を作成
+    exit_log = DbEntryLog(
+        id=str(uuid4()),
+        user_id=current_user.id,
+        action=EntryAction.exit,
+        occurred_at=datetime.utcnow()
+    )
+    db.add(exit_log)
+    db.commit()
+    
+    # 滞在時間を計算
+    duration = exit_log.occurred_at - last_entry.occurred_at
+    minutes = int(duration.total_seconds() / 60)
+    
+    return {
+        "message": "退場処理が完了しました",
+        "entry_time": last_entry.occurred_at,
+        "exit_time": exit_log.occurred_at,
+        "duration_minutes": minutes
+    }
+
+@app.get("/entry/current", response_model=CurrentVisitorsResponse)
+async def get_current_visitors(
+    db=Depends(get_db)
+):
+    """現在の在場者一覧取得"""
+    # 各ユーザーの最新の記録を取得
+    from sqlalchemy import func, and_
+    
+    # サブクエリ：各ユーザーの最新の記録時刻を取得
+    latest_logs = db.query(
+        DbEntryLog.user_id,
+        func.max(DbEntryLog.occurred_at).label('latest_time')
+    ).group_by(DbEntryLog.user_id).subquery()
+    
+    # 最新の記録がentryであるユーザーを取得
+    current_visitors = db.query(DbEntryLog).join(
+        latest_logs,
+        and_(
+            DbEntryLog.user_id == latest_logs.c.user_id,
+            DbEntryLog.occurred_at == latest_logs.c.latest_time
+        )
+    ).filter(DbEntryLog.action == EntryAction.entry).all()
+    
+    visitors = []
+    total_dogs = 0
+    
+    for log in current_visitors:
+        user = db.query(DbUser).filter(DbUser.id == log.user_id).first()
+        if user:
+            # ユーザーの犬を取得
+            dogs = db.query(DbDog).filter(DbDog.owner_id == user.id).all()
+            dogs_info = [{"id": dog.id, "name": dog.name} for dog in dogs]
+            total_dogs += len(dogs)
+            
+            visitors.append(EntryResponse(
+                entry_id=log.id,
+                user_id=user.id,
+                user_name=f"{user.last_name or ''} {user.first_name or ''}".strip(),
+                dogs=dogs_info,
+                entry_time=log.occurred_at,
+                status="in_park"
+            ))
+    
+    return CurrentVisitorsResponse(
+        total_visitors=len(visitors),
+        total_dogs=total_dogs,
+        visitors=visitors
+    )
+
+@app.get("/entry/history", response_model=List[EntryHistoryResponse])
+async def get_entry_history(
+    limit: int = 50,
+    current_user = Depends(get_current_user),
+    db=Depends(get_db)
+):
+    """入退場履歴取得（自分の履歴）"""
+    logs = db.query(DbEntryLog).filter(
+        DbEntryLog.user_id == current_user.id
+    ).order_by(DbEntryLog.occurred_at.desc()).limit(limit).all()
+    
+    history = []
+    for log in logs:
+        # その時点での犬情報を取得（簡略化のため現在の犬情報を使用）
+        dogs = db.query(DbDog).filter(DbDog.owner_id == current_user.id).all()
+        dog_names = [dog.name for dog in dogs]
+        
+        history.append(EntryHistoryResponse(
+            id=log.id,
+            user_id=log.user_id,
+            user_name=f"{current_user.last_name or ''} {current_user.first_name or ''}".strip(),
+            action=log.action.value,
+            occurred_at=log.occurred_at,
+            dogs=dog_names
+        ))
+    
+    return history
 
 # お知らせ関連
 @app.get("/notices", response_model=List[NoticeResponse])

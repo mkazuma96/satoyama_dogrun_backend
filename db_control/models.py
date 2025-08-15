@@ -111,13 +111,26 @@ class AdminLog(Base):
 class Application(Base):
     __tablename__ = "applications"
     id                    = Column(String(36), primary_key=True)
-    user_id               = Column(String(36), ForeignKey("users.id"), nullable=False)
+    user_id               = Column(String(36), ForeignKey("users.id"), nullable=True)  # NULL許可に変更
+    # ユーザー情報（申請時に保存）
+    user_email            = Column(String(255))
+    user_password_hash    = Column(String(255))
+    user_last_name        = Column(String(50))
+    user_first_name       = Column(String(50))
+    user_phone            = Column(String(20))
+    user_address          = Column(String(255))
+    user_prefecture       = Column(String(50))
+    user_city             = Column(String(50))
+    user_postal_code      = Column(String(10))
+    # 犬情報
     dog_name              = Column(String(50), nullable=False)
     dog_breed             = Column(String(50))
     dog_weight            = Column(String(20))
+    dog_age               = Column(Integer)
+    dog_gender            = Column(String(10))
     vaccine_certificate   = Column(String(255))  # ワクチン証明書のファイルパス
-    request_date           = Column(Date)
-    request_time           = Column(String(20))
+    request_date          = Column(Date)
+    request_time          = Column(String(20))
     status                = Column(Enum(ApplicationStatus), default=ApplicationStatus.pending)
     admin_notes           = Column(Text)         # 管理者メモ
     approved_by           = Column(String(36), ForeignKey("admin_users.id"))

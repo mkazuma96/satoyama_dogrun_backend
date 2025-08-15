@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List, Optional, ForwardRef
+from typing import List, Optional, ForwardRef, Dict
 from datetime import datetime, date
 from enum import Enum
 
@@ -73,7 +73,7 @@ class AdminUserUpdateRequest(BaseModel):
 # 申請管理
 class ApplicationResponse(BaseModel):
     id: str
-    user_id: str
+    user_id: Optional[str] = None
     user_name: str
     user_email: str
     user_phone: str
@@ -97,6 +97,39 @@ class ApplicationResponse(BaseModel):
 class ApplicationUpdateRequest(BaseModel):
     admin_notes: Optional[str] = None
     rejection_reason: Optional[str] = None
+
+# 新規申請作成（ユーザー登録申請）
+class ApplicationCreateRequest(BaseModel):
+    # ユーザー情報
+    email: str
+    password: str
+    last_name: str
+    first_name: str
+    phone_number: str
+    address: str
+    prefecture: str
+    city: str
+    postal_code: Optional[str] = None
+    
+    # 犬情報
+    dog_name: str
+    dog_breed: Optional[str] = None
+    dog_weight: Optional[str] = None
+    dog_age: Optional[int] = None
+    dog_gender: Optional[str] = None
+    vaccine_certificate: Optional[str] = None  # Base64エンコードまたはファイルパス
+    
+    # 申請情報
+    request_date: Optional[date] = None
+    request_time: Optional[str] = None
+    notes: Optional[str] = None
+
+class ApplicationStatusResponse(BaseModel):
+    application_id: str
+    status: ApplicationStatus
+    rejection_reason: Optional[str] = None
+    approved_at: Optional[datetime] = None
+    created_at: datetime
 
 # 管理者ログ
 class AdminLogResponse(BaseModel):
@@ -476,6 +509,42 @@ class DogDbResponse(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+# プロフィール詳細（ユーザー情報＋犬情報）
+class UserProfileDetailResponse(BaseModel):
+    id: str
+    email: str
+    last_name: Optional[str] = None
+    first_name: Optional[str] = None
+    address: Optional[str] = None
+    phone_number: Optional[str] = None
+    prefecture: Optional[str] = None
+    city: Optional[str] = None
+    created_at: Optional[datetime] = None
+    dogs: List[DogDbResponse] = []
+
+    class Config:
+        from_attributes = True
+
+# ワクチン接種記録スキーマ
+class VaccinationRecordRequest(BaseModel):
+    vaccine_type: str
+    administered_at: date
+    next_due_at: Optional[date] = None
+    image_url: Optional[str] = None
+
+class VaccinationRecordResponse(BaseModel):
+    id: str
+    dog_id: str
+    vaccine_type: str
+    administered_at: date
+    next_due_at: Optional[date] = None
+    image_url: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
 # ==== db_control 準拠の投稿・コメント・いいねスキーマ ====
 class CreatePostDbRequest(BaseModel):
     content: str
@@ -491,6 +560,23 @@ class PostDbResponse(BaseModel):
     comments_count: int
     likes_count: int
 
+class PostDetailResponse(BaseModel):
+    id: str
+    user_id: str
+    user_name: str
+    user_avatar: Optional[str] = None
+    content: str
+    images: List[str] = []
+    hashtags: List[str] = []
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    comments_count: int
+    likes_count: int
+    is_liked: bool = False
+    
+    class Config:
+        from_attributes = True
+
 class CreateCommentDbRequest(BaseModel):
     content: str
 
@@ -500,3 +586,93 @@ class CommentDbResponse(BaseModel):
     user_id: str
     content: str
     created_at: datetime
+
+# ==== イベント管理スキーマ（ユーザー向け） ====
+class EventResponse(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
+    event_date: date
+    start_time: str  # Time型をstrに変換して返す
+    end_time: str
+    location: str
+    capacity: int
+    fee: int
+    status: str
+    current_participants: int = 0
+    is_registered: bool = False
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+class EventDetailResponse(BaseModel):
+    id: str
+    title: str
+    description: Optional[str] = None
+    event_date: date
+    start_time: str
+    end_time: str
+    location: str
+    capacity: int
+    fee: int
+    status: str
+    current_participants: int = 0
+    is_registered: bool = False
+    my_dogs_registered: List[str] = []  # 登録済みの犬のID
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+class EventRegistrationRequest(BaseModel):
+    dog_ids: List[str]  # 参加させる犬のIDリスト
+
+class EventParticipantResponse(BaseModel):
+    id: str
+    user_id: str
+    user_name: str
+    dog_id: Optional[str] = None
+    dog_name: Optional[str] = None
+    registered_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+# ==== 入場管理スキーマ ====
+class QRCodeResponse(BaseModel):
+    qr_code: str  # Base64エンコードされたQRコード画像
+    user_id: str
+    expires_at: datetime
+
+class EntryRequest(BaseModel):
+    dog_ids: List[str] = []  # 入場させる犬のIDリスト
+
+class EntryResponse(BaseModel):
+    entry_id: str
+    user_id: str
+    user_name: str
+    dogs: List[Dict[str, str]] = []  # 入場した犬の情報
+    entry_time: datetime
+    status: str = "in_park"  # in_park, exited
+    
+    class Config:
+        from_attributes = True
+
+class CurrentVisitorsResponse(BaseModel):
+    total_visitors: int
+    total_dogs: int
+    visitors: List[EntryResponse] = []
+
+class EntryHistoryResponse(BaseModel):
+    id: str
+    user_id: str
+    user_name: str
+    action: str  # entry, exit
+    occurred_at: datetime
+    dogs: List[str] = []  # 関連する犬の名前
+    
+    class Config:
+        from_attributes = True
