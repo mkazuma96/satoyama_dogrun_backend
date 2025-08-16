@@ -98,7 +98,7 @@ allowed_origins = [origin.strip() for origin in allowed_origins if origin.strip(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1369,8 +1369,11 @@ async def apply_registration(
     city: str = Form(...),
     street: str = Form(...),
     building: Optional[str] = Form(None),
+    imabariResidency: str = Form(...),
     dogName: str = Form(...),
     dogBreed: str = Form(...),
+    dogAge: int = Form(...),
+    dogGender: str = Form(...),
     dogWeight: str = Form(...),
     applicationDate: date = Form(...),
     vaccine_certificate: UploadFile = File(...)
@@ -1428,8 +1431,8 @@ async def apply_registration(
         dog_name=dogName,
         dog_breed=dogBreed,
         dog_weight=str(dogWeight),
-        dog_age=None,
-        dog_gender=None,
+        dog_age=dogAge,
+        dog_gender=dogGender,
         vaccine_certificate=certificate_url,
         request_date=applicationDate,
         status=ApplicationStatus.pending,
