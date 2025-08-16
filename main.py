@@ -17,7 +17,6 @@ from models import (
     UserCreate, UserResponse, DogCreate, DogResponse,
     PostCreate, PostResponse, CommentCreate, CommentResponse,
     EventResponse, NoticeResponse, TagResponse,
-    VaccinationRecordRequest, VaccinationRecordResponse,
     CreatePostDbRequest, PostDbResponse, PostDetailResponse, CreateCommentDbRequest, CommentDbResponse,
     EventResponse as EventDbResponse, EventDetailResponse, EventRegistrationRequest, EventParticipantResponse,
     QRCodeResponse, EntryRequest, EntryResponse, CurrentVisitorsResponse, EntryHistoryResponse,
