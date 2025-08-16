@@ -16,7 +16,25 @@ from models import (
     Dog, Post, Comment, Event, Notice, Tag,
     UserCreate, UserResponse, DogCreate, DogResponse,
     PostCreate, PostResponse, CommentCreate, CommentResponse,
-    EventResponse, NoticeResponse, TagResponse
+    EventResponse, NoticeResponse, TagResponse,
+    VaccinationRecordRequest, VaccinationRecordResponse,
+    CreatePostDbRequest, PostDbResponse, PostDetailResponse, CreateCommentDbRequest, CommentDbResponse,
+    EventResponse as EventDbResponse, EventDetailResponse, EventRegistrationRequest, EventParticipantResponse,
+    QRCodeResponse, EntryRequest, EntryResponse, CurrentVisitorsResponse, EntryHistoryResponse,
+    # 管理者用スキーマ
+    AdminLoginRequest, AdminLoginResponse, AdminUserResponse,
+    ApplicationResponse, ApplicationUpdateRequest, ApplicationCreateRequest, ApplicationStatusResponse,
+    PostManagementResponse, PostStatusUpdateRequest,
+    DashboardStatsResponse,
+    # 営業時間・設定管理用スキーマ
+    BusinessHourResponse, BusinessHourUpdateRequest,
+    SpecialHolidayResponse, SpecialHolidayCreateRequest, SpecialHolidayUpdateRequest,
+    TodayBusinessHoursResponse,
+    SystemSettingResponse, SystemSettingUpdateRequest, SystemSettingsCategoryResponse,
+    SystemSettingsBackupResponse, SystemSettingsImportRequest,
+    # ユーザー・イベント管理拡張スキーマ
+    UserStatsResponse, UserDetailResponse, UserSuspendRequest,
+    EventStatsResponse, EventRegistrationResponse, EventManagementResponse, EventCreateRequest, EventUpdateRequest
 )
 from db_control.models import User as DbUser
 from db_control.models import Dog as DbDog
@@ -1409,7 +1427,9 @@ async def apply_registration(
         user_postal_code=postalCode,
         dog_name=dogName,
         dog_breed=dogBreed,
-        dog_weight=dogWeight,
+        dog_weight=str(dogWeight),
+        dog_age=None,
+        dog_gender=None,
         vaccine_certificate=certificate_url,
         request_date=applicationDate,
         status=ApplicationStatus.pending,
