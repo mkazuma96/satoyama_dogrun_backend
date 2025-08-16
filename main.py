@@ -1372,8 +1372,8 @@ async def apply_registration(
     imabariResidency: str = Form(...),
     dogName: str = Form(...),
     dogBreed: str = Form(...),
-    dogAge: int = Form(...),
-    dogGender: str = Form(...),
+    dogAge: Optional[int] = Form(None),
+    dogGender: Optional[str] = Form(None),
     dogWeight: str = Form(...),
     applicationDate: date = Form(...),
     vaccine_certificate: UploadFile = File(...)

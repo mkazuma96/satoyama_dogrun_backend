@@ -126,8 +126,8 @@ class Application(Base):
     dog_name              = Column(String(50), nullable=False)
     dog_breed             = Column(String(50))
     dog_weight            = Column(String(20))
-    dog_age               = Column(Integer)
-    dog_gender            = Column(String(10))
+    dog_age               = Column(Integer, nullable=True)
+    dog_gender            = Column(String(10), nullable=True)
     vaccine_certificate   = Column(String(255))  # ワクチン証明書のファイルパス
     request_date          = Column(Date)
     request_time          = Column(String(20))
