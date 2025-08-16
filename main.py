@@ -10,6 +10,7 @@ import os
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
 from models import (
     Dog, Post, Comment, Event, Notice, Tag,
@@ -91,6 +92,9 @@ security = HTTPBearer()
 UPLOAD_DIR = Path("uploads")
 POST_UPLOAD_DIR = UPLOAD_DIR / "posts"
 POST_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+VACCINE_CERTIFICATE_UPLOAD_DIR = UPLOAD_DIR / "vaccine_certificates"
+VACCINE_CERTIFICATE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Static filesのマウント
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
@@ -1335,59 +1339,91 @@ async def add_admin_comment(
 
 # 認証関連
 @app.post("/auth/apply", response_model=ApplicationStatusResponse)
-async def apply_registration(request: ApplicationCreateRequest, db=Depends(get_db)):
-    """新規利用申請（ユーザー登録申請）"""
+async def apply_registration(
+    db: Session = Depends(get_db),
+    # フォームフィールドを個別に受け取る
+    email: str = Form(...),
+    password: str = Form(...),
+    fullName: str = Form(...),
+    phoneNumber: str = Form(...),
+    postalCode: str = Form(...),
+    prefecture: str = Form(...),
+    city: str = Form(...),
+    street: str = Form(...),
+    building: Optional[str] = Form(None),
+    dogName: str = Form(...),
+    dogBreed: str = Form(...),
+    dogWeight: str = Form(...),
+    applicationDate: date = Form(...),
+    vaccine_certificate: UploadFile = File(...)
+):
+    """新規利用申請（ユーザー登録申請）- FormData対応"""
     from uuid import uuid4
-    
+
     # メールアドレスの重複チェック
-    existing_user = db.query(DbUser).filter(DbUser.email == request.email).first()
+    existing_user = db.query(DbUser).filter(DbUser.email == email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
-    
-    # 既存申請の確認（同じメールアドレスでpending状態の申請がないか）
+
+    # 既存申請の確認
     existing_application = db.query(Application).filter(
-        Application.user_email == request.email,
+        Application.user_email == email,
         Application.status == ApplicationStatus.pending
     ).first()
     if existing_application:
         raise HTTPException(status_code=400, detail="このメールアドレスで申請処理中です")
+        
+    # ワクチン証明書の保存
+    file_extension = Path(vaccine_certificate.filename).suffix
+    certificate_filename = f"{uuid4()}{file_extension}"
+    certificate_path = VACCINE_CERTIFICATE_UPLOAD_DIR / certificate_filename
     
+    try:
+        with certificate_path.open("wb") as buffer:
+            shutil.copyfileobj(vaccine_certificate.file, buffer)
+    finally:
+        vaccine_certificate.file.close()
+    
+    certificate_url = f"/uploads/vaccine_certificates/{certificate_filename}"
+
+    # 姓と名を分割
+    name_parts = fullName.split(' ', 1)
+    last_name = name_parts[0]
+    first_name = name_parts[1] if len(name_parts) > 1 else ''
+    
+    # 住所を結合
+    full_address = f"{prefecture} {city} {street} {building or ''}".strip()
+
     # 申請データを作成
     application = Application(
         id=str(uuid4()),
-        # ユーザー情報（まだユーザーは作成しない）
-        user_id=None,  # 新規申請時はNULL
-        user_email=request.email,
-        user_password_hash=get_password_hash(request.password),
-        user_last_name=request.last_name,
-        user_first_name=request.first_name,
-        user_phone=request.phone_number,
-        user_address=request.address,
-        user_prefecture=request.prefecture,
-        user_city=request.city,
-        user_postal_code=request.postal_code,
-        # 犬情報
-        dog_name=request.dog_name,
-        dog_breed=request.dog_breed,
-        dog_weight=request.dog_weight,
-        dog_age=request.dog_age,
-        dog_gender=request.dog_gender,
-        vaccine_certificate=request.vaccine_certificate,
-        # 申請情報
-        request_date=request.request_date or date.today(),
-        request_time=request.request_time,
+        user_id=None,
+        user_email=email,
+        user_password_hash=get_password_hash(password),
+        user_last_name=last_name,
+        user_first_name=first_name,
+        user_phone=phoneNumber,
+        user_address=full_address,
+        user_prefecture=prefecture,
+        user_city=city,
+        user_postal_code=postalCode,
+        dog_name=dogName,
+        dog_breed=dogBreed,
+        dog_weight=dogWeight,
+        vaccine_certificate=certificate_url,
+        request_date=applicationDate,
         status=ApplicationStatus.pending,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow()
     )
-    
+
     db.add(application)
     db.commit()
     db.refresh(application)
-    
+
     return ApplicationStatusResponse(
         application_id=application.id,
-        status=application.status,
+        status=application.status.value,
         rejection_reason=None,
         approved_at=None,
         created_at=application.created_at
