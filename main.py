@@ -1354,7 +1354,7 @@ async def add_admin_comment(
 
 # ===== 既存のAPIエンドポイント =====
 
-# 認証関連
+# 認証関連 - 強制更新用コメント
 @app.post("/auth/apply", response_model=ApplicationStatusResponse)
 async def apply_registration(
     db: Session = Depends(get_db),
