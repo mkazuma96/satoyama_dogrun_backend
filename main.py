@@ -12,11 +12,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
-from models import (
-    Dog, Post, Comment, Event, Notice, Tag,
-    UserCreate, UserResponse, DogCreate, DogResponse,
-    PostCreate, PostResponse, CommentCreate, CommentResponse,
-    EventResponse, NoticeResponse, TagResponse,
+# models.pyは不要なので削除 - db_control.modelsを使用
+from schemas import (
     CreatePostDbRequest, PostDbResponse, PostDetailResponse, CreateCommentDbRequest, CommentDbResponse,
     EventResponse as EventDbResponse, EventDetailResponse, EventRegistrationRequest, EventParticipantResponse,
     QRCodeResponse, EntryRequest, EntryResponse, CurrentVisitorsResponse, EntryHistoryResponse,
