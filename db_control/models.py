@@ -309,6 +309,26 @@ class SpecialHoliday(Base):
     updated_at    = Column(DateTime)
 
 
+# ── お知らせ・タグテーブル ──────────────────────────────────
+
+class Notice(Base):
+    __tablename__ = "notices"
+    id          = Column(String(36), primary_key=True)
+    title       = Column(String(100), nullable=False)
+    content     = Column(Text)
+    priority    = Column(Enum(NoticePriority), default=NoticePriority.low)
+    status      = Column(Enum(NoticeStatus), default=NoticeStatus.active)
+    category    = Column(String(50))
+    created_at  = Column(DateTime)
+    updated_at  = Column(DateTime)
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+    id     = Column(String(36), primary_key=True)
+    label  = Column(String(50), unique=True, nullable=False)
+
+
 # ── システム設定テーブル ──────────────────────────────────
 
 class SystemSetting(Base):
