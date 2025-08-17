@@ -21,7 +21,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 # db_control/models.pyからBaseとモデルをインポート
-from models import Base, User, Dog
+from .models import Base, User, Dog
 
 def init_local_db():
     """ローカルSQLiteデータベースにテーブルを作成"""
