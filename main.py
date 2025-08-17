@@ -30,7 +30,8 @@ from schemas import (
     SystemSettingsBackupResponse, SystemSettingsImportRequest,
     # ユーザー・イベント管理拡張スキーマ
     UserStatsResponse, UserDetailResponse, UserSuspendRequest,
-    EventStatsResponse, EventRegistrationResponse, EventManagementResponse, EventCreateRequest, EventUpdateRequest
+    EventStatsResponse, EventRegistrationResponse, EventManagementResponse, EventCreateRequest, EventUpdateRequest,
+    NoticeManagementResponse
 )
 from db_control.models import User as DbUser
 from db_control.models import Dog as DbDog
@@ -2516,11 +2517,11 @@ async def get_entry_history(
     return history
 
 # お知らせ関連
-@app.get("/notices", response_model=List[NoticeResponse])
+@app.get("/notices", response_model=List[NoticeManagementResponse])
 async def get_notices(db=Depends(get_db)):
     """お知らせ一覧取得"""
     notices = db.query(Notice).order_by(Notice.created_at.desc()).all()
-    return [NoticeResponse.from_orm(notice) for notice in notices]
+    return [NoticeManagementResponse.from_orm(notice) for notice in notices]
 
 @app.put("/notices/{notice_id}/read")
 async def mark_notice_as_read(
