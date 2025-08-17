@@ -676,3 +676,10 @@ class EntryHistoryResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class TagResponse(BaseModel):
+    id: str
+    label: str
+    
+    class Config:
+        from_attributes = True

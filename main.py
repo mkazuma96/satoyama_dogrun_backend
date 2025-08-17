@@ -12,27 +12,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
-# models.pyは不要なので削除 - db_control.modelsを使用
-from schemas import (
-    CreatePostDbRequest, PostDbResponse, PostDetailResponse, CreateCommentDbRequest, CommentDbResponse,
-    EventResponse as EventDbResponse, EventDetailResponse, EventRegistrationRequest, EventParticipantResponse,
-    QRCodeResponse, EntryRequest, EntryResponse, CurrentVisitorsResponse, EntryHistoryResponse,
-    # 管理者用スキーマ
-    AdminLoginRequest, AdminLoginResponse, AdminUserResponse,
-    ApplicationResponse, ApplicationUpdateRequest, ApplicationCreateRequest, ApplicationStatusResponse,
-    PostManagementResponse, PostStatusUpdateRequest,
-    DashboardStatsResponse,
-    # 営業時間・設定管理用スキーマ
-    BusinessHourResponse, BusinessHourUpdateRequest,
-    SpecialHolidayResponse, SpecialHolidayCreateRequest, SpecialHolidayUpdateRequest,
-    TodayBusinessHoursResponse,
-    SystemSettingResponse, SystemSettingUpdateRequest, SystemSettingsCategoryResponse,
-    SystemSettingsBackupResponse, SystemSettingsImportRequest,
-    # ユーザー・イベント管理拡張スキーマ
-    UserStatsResponse, UserDetailResponse, UserSuspendRequest,
-    EventStatsResponse, EventRegistrationResponse, EventManagementResponse, EventCreateRequest, EventUpdateRequest,
-    NoticeManagementResponse
-)
+# 統一されたschemasインポート（重複を整理）
 from db_control.models import User as DbUser
 from db_control.models import Dog as DbDog
 from db_control.models import Post as DbPost
@@ -76,7 +56,8 @@ from schemas import (
     SystemSettingsBackupResponse, SystemSettingsImportRequest,
     # ユーザー・イベント管理拡張スキーマ
     UserStatsResponse, UserDetailResponse, UserSuspendRequest,
-    EventStatsResponse, EventRegistrationResponse, EventManagementResponse, EventCreateRequest, EventUpdateRequest
+    EventStatsResponse, EventRegistrationResponse, EventManagementResponse, EventCreateRequest, EventUpdateRequest,
+    NoticeManagementResponse, TagResponse
 )
 
 load_dotenv()
