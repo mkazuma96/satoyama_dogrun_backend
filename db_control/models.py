@@ -317,7 +317,7 @@ class Notice(Base):
     title       = Column(String(100), nullable=False)
     content     = Column(Text)
     priority    = Column(Enum(NoticePriority), default=NoticePriority.low)
-    status      = Column(Enum(NoticeStatus), default=NoticeStatus.active)
+    status      = Column(Enum(NoticeStatus), default=NoticeStatus.published)
     category    = Column(String(50))
     created_at  = Column(DateTime)
     updated_at  = Column(DateTime)
