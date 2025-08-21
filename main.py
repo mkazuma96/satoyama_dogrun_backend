@@ -27,7 +27,7 @@ from db_control.models import EventRegistration as DbEventRegistration
 from db_control.models import EntryLog as DbEntryLog
 from db_control.models import EntryAction
 from db_control.models import EventStatus
-from db_control.models import AdminUser, AdminLog, Application, ApplicationStatus, BusinessHour, SpecialHoliday, SystemSetting, Notice, Tag
+from db_control.models import AdminUser, AdminLog, Application, ApplicationStatus, BusinessHour, SpecialHoliday, SystemSetting
 from database import engine, get_db
 from auth import (
     get_current_user, create_access_token, verify_password, get_password_hash,
