@@ -5,3 +5,4 @@ git commit -m "修正: インポートエラー解決 - schemasからの正し�
 git push origin main
 echo "デプロイ完了"
 pause
+
